@@ -1,125 +1,107 @@
-/*
- * License:  see License.txt
+"use strict";
 
- * Code  for TB 78 or later: Creative Commons (CC BY-ND 4.0):
- *      Attribution-NoDerivatives 4.0 International (CC BY-ND 4.0) 
- 
- * Contributors:  see Changes.txt
- */
-
-// Keep track of attachment data per message, as we currently cannot get the attachment
-// from the message directly.
-var attachmentData = {};
-
-
-
-// INSTALL/UPPDATE POPUPS
-// ----------------------
-
-// Register listener for info popups on install/update.
-messenger.runtime.onInstalled.addListener(async ({ reason, temporary }) => {
-  if (temporary) {
-    // skip during development
-    return; 
+// Простий логер
+(function () {
+  const g = (typeof self !== "undefined") ? self :
+            (typeof window !== "undefined") ? window : this;
+  if (!g.createLogger) {
+    g.createLogger = function (ns) {
+      const tag = `[${ns}]`;
+      return {
+        info:  (...a) => console.info(tag, ...a),
+        debug: (...a) => console.debug(tag, ...a),
+        warn:  (...a) => console.warn(tag, ...a),
+        error: (...a) => console.error(tag, ...a),
+      };
+    };
   }
-  
-  switch (reason) {
-    case "install":
-    {
-      const url = messenger.runtime.getURL("popup/installed.html");
-      await messenger.windows.create({ url, type: "popup", height: 680, width: 900, });
+})();
+const LOG = createLogger("BG");
+
+// Глобальні хендлери помилок
+self.addEventListener("error", (ev) => LOG.error("Uncaught error:", ev.message, ev.error));
+self.addEventListener("unhandledrejection", (ev) => LOG.error("Unhandled promise rejection:", ev.reason));
+
+// Утиліти для перевірки вкладень
+const TARGET_EXTENSIONS = ["jpg","jpeg","png","gif","bmp","tif","tiff","webp","svg","txt","log","md","js"];
+function lower(s){ return (typeof s === "string") ? s.toLowerCase() : ""; }
+function ext(name){ const n = (name||""); const i = n.lastIndexOf("."); return (i>=0 && i<n.length-1) ? lower(n.slice(i+1)) : ""; }
+function isTargetAttachment(att){
+  const ct = lower(att?.contentType||"");
+  const e  = ext(att?.name||"");
+  if (ct.startsWith("image/")) return true;
+  if (ct === "text/plain" || ct === "application/x-javascript") return true;
+  return TARGET_EXTENSIONS.includes(e);
+}
+
+// Увімк/вимк action біля теми листа
+function setMessageAction(tabId, enable){
+  try {
+    if (typeof tabId !== "number") return;
+    if (enable) messenger.messageDisplayAction.enable(tabId);
+    else messenger.messageDisplayAction.disable(tabId);
+  } catch(e){ LOG.error("messageDisplayAction toggle failed:", e); }
+}
+
+// Відкрити переглядач у popup/вкладці та передати контекст
+async function openViewerWindow(ctx = {}){
+  try{
+    const url = messenger.runtime.getURL("download/download.html");
+    await messenger.storage.local.set({ viewerContext: ctx });
+
+    // Початковий розмір: збільшений (фактичне масштабування до 80% — у download.js)
+    if (messenger?.windows?.create){
+      await messenger.windows.create({ url, type: "popup", width: 1100, height: 800, allowScriptsToClose: true });
+      return;
     }
-    break;
-    
-    case "update":
-    {
-      const url = messenger.runtime.getURL("popup/update.html");
-      await messenger.windows.create({ url, type: "popup", height: 680, width: 990, });
+    if (messenger?.tabs?.create){
+      await messenger.tabs.create({ url, active: true });
+      return;
     }
-    break;
-  }
+    LOG.warn("No windows/tabs API available.");
+  }catch(e){ LOG.error("openViewerWindow failed:", e); }
+}
+
+// Визначити чи є корисні вкладення — та показати іконку дії
+messenger.messageDisplay.onMessageDisplayed.addListener(async (tab, message) => {
+  try{
+    const tabId = (tab && typeof tab.id === "number") ? tab.id : null;
+    if (tabId == null) return;
+
+    const atts = await messenger.messages.listAttachments(message.id);
+    const enable = (atts || []).some(isTargetAttachment);
+    setMessageAction(tabId, enable);
+  }catch(e){ LOG.error("onMessageDisplayed failed:", e); }
 });
 
-
-
-// IMAGE VIEWER LOGIC
-// ------------------
-
-// Activate/Deativate our button depending on included images.
-messenger.messageDisplay.onMessageDisplayed.addListener( async (tab, message) => {
-  // console.log(`Message displayed in tab ${tab.id}: ${message.subject}`);
-  
-  let data = await messenger.Utilities.attachmentGetImagesInfo(tab.windowId);
-  if (data.length == 0) {
-    messenger.messageDisplayAction.disable(tab.tabID);
-  } else {
-    messenger.messageDisplayAction.enable(tab.tabID);
-  };
+// Клік по іконці дії — відкрити переглядач
+messenger.messageDisplayAction.onClicked.addListener(async (tab) => {
+  try{
+    const tabId = (tab && typeof tab.id === "number") ? tab.id : null;
+    const msg   = tabId != null ? await messenger.messageDisplay.getDisplayedMessage(tabId) : null;
+    const atts  = msg?.id ? await messenger.messages.listAttachments(msg.id) : [];
+    await openViewerWindow({
+      tabId,
+      messageId: msg?.id || null,
+      attachmentPartNames: (atts||[]).map(a => a?.partName || "").filter(Boolean)
+    });
+  }catch(e){ LOG.error("onClicked failed:", e); }
 });
 
-messenger.messageDisplayAction.onClicked.addListener(async (tab, info) => {  
-  let data = await messenger.Utilities.attachmentGetImagesInfo(tab.windowId);
-  if (data.length == 0) {
-    messenger.messageDisplayAction.disable(tab.tabID);
-    return;
-  }
-
-  // Show a loading screen, while we wait for the images to be loaded.
-  // TODO: Since we know how many images have to be loaded, we could
-  //  add a progress bar or load the images dynamically in the viewer.
-  let loadingScreen = await messenger.windows.create({url: "./popup/loading.html", titlePreface: "ImageViewer: ", height: 120,  width: 340,  type: "popup"});
-  for (let i = 0; i < data.length; i++) {
-    data[i].imageData = await messenger.Utilities.attachmentGetImageData(data[i].url);
-  }
-  
-  // Get displayed message and store the attachment data of this message.
-  let message = await messenger.messageDisplay.getDisplayedMessage(tab.id);
-  // store the attachment Data in the background page, per message
-  attachmentData[message.id] = data;
-
-    // Get dimensions from main window to calculate matching size of image viewer popup.
-  let mainWnd = await messenger.windows.getLastFocused();
-  let popupWidth = parseInt( 0.89 * mainWnd.width);
-  let popupHeight = parseInt(  0.92*mainWnd.height);
-  
-  // remove loading screen
-  messenger.windows.remove(loadingScreen.id);
-  
-  // The popup window should be bound to the message (and its attachments) and not to the
-  // current main window. Using the windowId as reference information seems wrong, we need
-  // to connect the popup with the message directly and allow the popup to get the attachments
-  // from the provided message.
-  messenger.windows.create({
-    allowScriptsToClose: true, 
-    url: `./popup/imgview.html?messageId=${message.id}`,
-    height: popupHeight, 
-    width: popupWidth, 
-    type: "popup"
+// (Опціонально) глобальна іконка
+if (messenger?.browserAction?.onClicked?.addListener){
+  messenger.browserAction.onClicked.addListener(async (tab) => {
+    try{
+      const tabId = (tab && typeof tab.id === "number") ? tab.id : null;
+      const msg   = tabId != null ? await messenger.messageDisplay.getDisplayedMessage(tabId) : null;
+      const atts  = msg?.id ? await messenger.messages.listAttachments(msg.id) : [];
+      await openViewerWindow({
+        tabId,
+        messageId: msg?.id || null,
+        attachmentPartNames: (atts||[]).map(a => a?.partName || "").filter(Boolean)
+      });
+    }catch(e){ LOG.error("browserAction.onClicked failed:", e); }
   });
-});
+}
 
-// Communication with other parts of the add-on, for example to gain access to the
-// attachmentData for a given messageId.
-messenger.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  switch (request.msg) {
-    case "getAttachmentData":
-      sendResponse(attachmentData[request.messageId]);
-      delete attachmentData[request.messageId];
-      break;
-  }
-});
-
-
-
-
-// DOWNLOAD PREVIEW
-// ----------------
-// Register a webExtension iframe inside the unknow file action dialog.
-messenger.ex_customui.add(
-    messenger.ex_customui.LOCATION_UNKNOWN_FILE_ACTION,
-    "download/download.html",
-    {
-      height: 150,
-      hidden: true, //default to hidden and only show if the content-type is an image
-    }
-  );
+// ex_customui — не використовується (TB ≥ 120)
