@@ -1,34 +1,57 @@
 {
     "manifest_version": 2,
-    "name": "Image Viewer/Slideshow",
+    "name": "Attachment Viewer Enhanced",
     "description": "Viewing images in attachments as full size or thumbnail",
-    "version": "1.2.3",
+    "version": "2.9.4",
     "author": "opto (Klaus Buecher)",
     "developer": {
         "name": "opto (Klaus Buecher)"
     },
  
+    "icons": {
+		"32": "/skin/iconmonstr-paperclip-6-32.png"
+	},
+
+
     "permissions": [
         "messagesRead",
         "storage",
-        "management"
-    ],
+        "management",
+        "downloads",
+        "tabs"
+	  ],
     
     "applications": {
         "gecko": {
-            "id": "immageview@opto.one",
-            "strict_min_version": "78.6"
+            "id": "webmaster@3d-kstudio.com",
+            "strict_min_version": "115.0",
+            "strict_max_version": "140.*"
         }
     },
     
+
+
     "background": {
-        "scripts": ["im-background.js"]
+        "page": "im-background.html"
     },
 
     "message_display_action": {
-        "default_title": "Imgview"
+        "default_title": "Img-View",
+        "default_icon": {
+             "32": "skin/iconmonstr-picture-10-32.png"
+              }
 
     },
+
+ 
+
+    "browser_action": {
+        "default_title": "Office-View",
+        "browser_style": true,
+        "default_icon": {
+            "32": "skin/iconmonstr-paperclip-8-32.png"
+              }
+     },
 
     "experiment_apis": {
         "Utilities": {
